@@ -1,0 +1,39 @@
+type ActivityLog = record {
+  activity_type : text;
+  duration : nat64;
+  timestamp : nat64;
+};
+type ChildProfile = record {
+  id : nat64;
+  age : nat8;
+  privacy_preserving_logs : vec ActivityLog;
+  daily_screen_time_limit : nat64;
+  parental_notifications : vec Notification;
+  name : text;
+  restricted_apps : vec text;
+  token_rewards : nat64;
+  parent : principal;
+  current_screen_time : nat64;
+};
+type LogActivityPayload = record {
+  activity_type : text;
+  duration : nat64;
+  child_id : nat64;
+};
+type Notification = record { message : text; timestamp : nat64 };
+type RestrictAppPayload = record { child_id : nat64; app_name : text };
+type Result = variant { Ok : vec ActivityLog; Err : text };
+type Result_1 = variant { Ok : ChildProfile; Err : text };
+type Result_2 = variant { Ok : record { nat64; nat64 }; Err : text };
+type RewardTokenPayload = record { child_id : nat64; tokens : nat64 };
+type SetScreenTimePayload = record { child_id : nat64; time_limit : nat64 };
+service : {
+  create_child_profile : (text, nat8, nat64) -> (ChildProfile);
+  get_activity_logs : (nat64) -> (Result) query;
+  get_child_profile : (nat64) -> (Result_1) query;
+  get_screen_time_report : (nat64) -> (Result_2) query;
+  log_activity : (LogActivityPayload) -> (Result_1);
+  restrict_app : (RestrictAppPayload) -> (Result_1);
+  reward_tokens : (RewardTokenPayload) -> (Result_1);
+  set_screen_time : (SetScreenTimePayload) -> (Result_1);
+}
