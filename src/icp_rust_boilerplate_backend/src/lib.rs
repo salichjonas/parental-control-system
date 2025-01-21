@@ -97,8 +97,14 @@ thread_local! {
 }
 
 // Profile Management
+/// Create a new child profile.
+/// Validates that the name is not empty and the age is a positive number.
 #[ic_cdk::update]
-fn create_child_profile(name: String, age: u8, daily_screen_time_limit: u64) -> ChildProfile {
+fn create_child_profile(name: String, age: u8, daily_screen_time_limit: u64) -> Result<ChildProfile, String> {
+    if name.is_empty() || age == 0 || daily_screen_time_limit == 0 {
+        return Err("Invalid input: name, age, and daily screen time limit must be valid".to_string());
+    }
+
     let child_id = ID_COUNTER.with(|counter| {
         let current_value = *counter.borrow().get();
         counter.borrow_mut().set(current_value + 1).unwrap();
@@ -119,17 +125,22 @@ fn create_child_profile(name: String, age: u8, daily_screen_time_limit: u64) -> 
     };
 
     CHILD_PROFILES.with(|profiles| profiles.borrow_mut().insert(child_id, new_profile.clone()));
-    new_profile
+    Ok(new_profile)
 }
 
+/// Update the daily screen time limit for a child.
+/// Validates that the caller is the parent and the time limit is non-zero.
 #[ic_cdk::update]
 fn set_screen_time(payload: SetScreenTimePayload) -> Result<ChildProfile, String> {
+    if payload.time_limit == 0 {
+        return Err("Invalid input: Time limit must be greater than 0".to_string());
+    }
+
     CHILD_PROFILES.with(|profiles| {
         let mut profiles_ref = profiles.borrow_mut();
         if let Some(mut profile) = profiles_ref.get(&payload.child_id) {
-            // Verify caller is parent
             if profile.parent != caller() {
-                return Err("Unauthorized: Only parent can modify screen time".to_string());
+                return Err("Unauthorized: Only the parent can modify screen time".to_string());
             }
             profile.daily_screen_time_limit = payload.time_limit;
             profiles_ref.insert(payload.child_id, profile.clone());
@@ -140,23 +151,25 @@ fn set_screen_time(payload: SetScreenTimePayload) -> Result<ChildProfile, String
     })
 }
 
-// Activity Tracking
+/// Log an activity for a child, updating screen time and sending notifications if limits are exceeded.
 #[ic_cdk::update]
 fn log_activity(payload: LogActivityPayload) -> Result<ChildProfile, String> {
+    if payload.duration == 0 || payload.activity_type.is_empty() {
+        return Err("Invalid input: Activity type and duration must be valid".to_string());
+    }
+
     CHILD_PROFILES.with(|profiles| {
         let mut profiles_ref = profiles.borrow_mut();
         if let Some(mut profile) = profiles_ref.get(&payload.child_id) {
-            // Create new activity log
             let new_log = ActivityLog {
                 timestamp: time(),
-                activity_type: payload.activity_type,
+                activity_type: payload.activity_type.clone(),
                 duration: payload.duration,
             };
 
-            // Update screen time and check limits
             profile.current_screen_time += payload.duration;
+
             if profile.current_screen_time > profile.daily_screen_time_limit {
-                // Add notification for parent
                 profile.parental_notifications.push(Notification {
                     timestamp: time(),
                     message: "Daily screen time limit exceeded".to_string(),
@@ -172,15 +185,18 @@ fn log_activity(payload: LogActivityPayload) -> Result<ChildProfile, String> {
     })
 }
 
-// Token Rewards
+/// Reward tokens to a child. Validates that the caller is the parent.
 #[ic_cdk::update]
 fn reward_tokens(payload: RewardTokenPayload) -> Result<ChildProfile, String> {
+    if payload.tokens == 0 {
+        return Err("Invalid input: Tokens must be greater than 0".to_string());
+    }
+
     CHILD_PROFILES.with(|profiles| {
         let mut profiles_ref = profiles.borrow_mut();
         if let Some(mut profile) = profiles_ref.get(&payload.child_id) {
-            // Verify caller is parent
             if profile.parent != caller() {
-                return Err("Unauthorized: Only parent can reward tokens".to_string());
+                return Err("Unauthorized: Only the parent can reward tokens".to_string());
             }
             profile.token_rewards += payload.tokens;
             profiles_ref.insert(payload.child_id, profile.clone());
@@ -191,22 +207,25 @@ fn reward_tokens(payload: RewardTokenPayload) -> Result<ChildProfile, String> {
     })
 }
 
-// App Restrictions
+/// Add an app restriction for a child. Validates that the caller is the parent.
 #[ic_cdk::update]
 fn restrict_app(payload: RestrictAppPayload) -> Result<ChildProfile, String> {
+    if payload.app_name.is_empty() {
+        return Err("Invalid input: App name cannot be empty".to_string());
+    }
+
     CHILD_PROFILES.with(|profiles| {
         let mut profiles_ref = profiles.borrow_mut();
         if let Some(mut profile) = profiles_ref.get(&payload.child_id) {
-            // Verify caller is parent
             if profile.parent != caller() {
-                return Err("Unauthorized: Only parent can restrict apps".to_string());
+                return Err("Unauthorized: Only the parent can restrict apps".to_string());
             }
 
             if !profile.restricted_apps.contains(&payload.app_name) {
                 profile.restricted_apps.push(payload.app_name);
                 profile.parental_notifications.push(Notification {
                     timestamp: time(),
-                    message: format!("New app restriction added: {}", profile.restricted_apps.last().unwrap()),
+                    message: format!("New app restriction added: {}", payload.app_name),
                 });
             }
             profiles_ref.insert(payload.child_id, profile.clone());
@@ -217,14 +236,13 @@ fn restrict_app(payload: RestrictAppPayload) -> Result<ChildProfile, String> {
     })
 }
 
-// Query Functions
+/// Retrieve a child's profile. Validates that the caller is the parent.
 #[ic_cdk::query]
 fn get_child_profile(child_id: u64) -> Result<ChildProfile, String> {
     CHILD_PROFILES.with(|profiles| {
         if let Some(profile) = profiles.borrow().get(&child_id) {
-            // Verify caller is parent
             if profile.parent != caller() {
-                return Err("Unauthorized: Only parent can view profile".to_string());
+                return Err("Unauthorized: Only the parent can view the profile".to_string());
             }
             Ok(profile)
         } else {
@@ -233,13 +251,13 @@ fn get_child_profile(child_id: u64) -> Result<ChildProfile, String> {
     })
 }
 
+/// Retrieve a child's screen time report. Validates that the caller is the parent.
 #[ic_cdk::query]
 fn get_screen_time_report(child_id: u64) -> Result<(u64, u64), String> {
     CHILD_PROFILES.with(|profiles| {
         if let Some(profile) = profiles.borrow().get(&child_id) {
-            // Verify caller is parent
             if profile.parent != caller() {
-                return Err("Unauthorized: Only parent can view reports".to_string());
+                return Err("Unauthorized: Only the parent can view reports".to_string());
             }
             Ok((profile.current_screen_time, profile.daily_screen_time_limit))
         } else {
@@ -248,13 +266,13 @@ fn get_screen_time_report(child_id: u64) -> Result<(u64, u64), String> {
     })
 }
 
+/// Retrieve a child's activity logs. Validates that the caller is the parent.
 #[ic_cdk::query]
 fn get_activity_logs(child_id: u64) -> Result<Vec<ActivityLog>, String> {
     CHILD_PROFILES.with(|profiles| {
         if let Some(profile) = profiles.borrow().get(&child_id) {
-            // Verify caller is parent
             if profile.parent != caller() {
-                return Err("Unauthorized: Only parent can view logs".to_string());
+                return Err("Unauthorized: Only the parent can view logs".to_string());
             }
             Ok(profile.privacy_preserving_logs.clone())
         } else {
